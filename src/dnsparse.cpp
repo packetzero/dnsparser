@@ -5,6 +5,9 @@
 #include <map>
 using namespace std;
 
+/*
+* Implementation of DnsParser
+*/
 class DnsParserImpl : public DnsParser
 {
 public:
@@ -20,6 +23,10 @@ private:
   string _getTopName(string name, string &path);
   void   _addCname(string cname, string name);
 
+  //-------------------------------------------------------------------------
+  // Clears _mapCnameToName
+  // TODO: Use map.clear() instead?
+  //-------------------------------------------------------------------------
   void   _clear() {
     while (_mapCnameToName.size() > 0) {
       auto it = _mapCnameToName.begin();
@@ -31,43 +38,55 @@ private:
   DnsParserListener* _listener;
 };
 
+//-------------------------------------------------------------------------
+// DnsParserNew - return new instance of DnsParserImpl
+//-------------------------------------------------------------------------
 DnsParser* DnsParserNew(DnsParserListener* listener) { return new DnsParserImpl(listener); }
 
 // Reads a uint16_t and byte-swaps ntohs()
 #define U16S(_PAYLOAD, _INDEX) \
-  ((((uint8_t*)(_PAYLOAD))[_INDEX] << 8) + ((uint8_t*)(_PAYLOAD))[_INDEX+1])
+((((uint8_t*)(_PAYLOAD))[_INDEX] << 8) + ((uint8_t*)(_PAYLOAD))[_INDEX+1])
 
 
-  struct dns_hdr_t
-  {
-      uint16_t _txid;
-      uint16_t _flags;
-      uint16_t _numQueries;
-      uint16_t _numAnswers;
-      uint16_t _numAuth;
-      uint16_t _numAddl;
-  };
+struct dns_hdr_t
+{
+  uint16_t _txid;
+  uint16_t _flags;
+  uint16_t _numQueries;
+  uint16_t _numAnswers;
+  uint16_t _numAuth;
+  uint16_t _numAddl;
+};
 
-  #define DNS_FLAG_RESPONSE 0x8000
-  #define DNS_FLAG_OPCODE(FLGS) ((FLGS >> 11) & 0x0F)
+#define DNS_FLAG_RESPONSE 0x8000
+#define DNS_FLAG_OPCODE(FLGS) ((FLGS >> 11) & 0x0F)
 
-  int skip_name(char *ptr, int remaining)
-  {
-      char *p = ptr;
-      char *end = p + remaining;
-      while (p < end) {
-          int dotLen = *p;
-          if ((dotLen & 0xc0) == 0xc0) {
-            printf("skip_name not linear!\n");
-          }
-          if (dotLen < 0 || dotLen >= remaining) return -1;
-          if (dotLen == 0) return (int)(p - ptr + 1);
-          p += dotLen + 1;
-          remaining -= dotLen + 1;
-      }
-      return -1;
+//-------------------------------------------------------------------------
+// skip_name - jump over name
+// @returns -1 on error, otherwise length of name
+//-------------------------------------------------------------------------
+int skip_name(char *ptr, int remaining)
+{
+  char *p = ptr;
+  char *end = p + remaining;
+  while (p < end) {
+    int dotLen = *p;
+    if ((dotLen & 0xc0) == 0xc0) {
+      printf("skip_name not linear!\n");
+    }
+    if (dotLen < 0 || dotLen >= remaining) return -1;
+    if (dotLen == 0) return (int)(p - ptr + 1);
+    p += dotLen + 1;
+    remaining -= dotLen + 1;
   }
+  return -1;
+}
 
+//-------------------------------------------------------------------------
+// Read query records
+// @returns -1 on error
+// @returns Number of bytes taken up by query records
+//-------------------------------------------------------------------------
 int dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int numQueries)
 {
   int rem = remaining;
@@ -86,7 +105,13 @@ int dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int 
 
 #define MAX_STR_LEN 128
 
-static int dnsReadName(string &retstr, uint16_t nameOffset, char *payload, int payloadLen)
+//-------------------------------------------------------------------------
+// Reads the domain name at nameOffset in payload
+// retstr will contain domain name on exit.
+// @returns Length in bytes of retstr on exit.
+// @returns -1 on error.
+//-------------------------------------------------------------------------
+static int dnsReadName(string &retstr /* out */, uint16_t nameOffset, char *payload, int payloadLen)
 {
   if (nameOffset == 0 || nameOffset >= payloadLen) return -1;
 
@@ -100,7 +125,7 @@ static int dnsReadName(string &retstr, uint16_t nameOffset, char *payload, int p
     uint16_t dotLen = *p;
     if ((dotLen & 0xc0) == 0xc0) {
       if (p > pstart)
-        retstr = string(tmp,(int)(p - pstart -1));
+      retstr = string(tmp,(int)(p - pstart -1));
 
       p++;
       string subStr;
@@ -112,7 +137,7 @@ static int dnsReadName(string &retstr, uint16_t nameOffset, char *payload, int p
     if (dotLen < 0 || ((p + dotLen) >= end)) return -1;
     if (dotLen == 0) {
       if (p > pstart)
-        retstr = string(tmp,(int)(p - pstart -1));
+      retstr = string(tmp,(int)(p - pstart -1));
       return retstr.length();
     }
 
@@ -120,7 +145,7 @@ static int dnsReadName(string &retstr, uint16_t nameOffset, char *payload, int p
 
     // sanity check on max length of temporary buffer
     if (dest >= (tmp + sizeof(tmp)))
-      return -1;
+    return -1;
 
     if (dest != tmp) {*dest++ = '.';}
     p++;
@@ -147,6 +172,20 @@ struct dns_ans_t
 #define DNS_ANS_TYPE_AAAA 28  // ipv6
 #define DNS_ANS_CLASS_IN 1
 
+//-------------------------------------------------------------------------
+// dnsReadAnswers
+// Read response records (numAnswers expected) at ptr.
+// _listener.onDnsRec() will be called for each record found.
+//
+// @param payload    Start of DNS payload.
+// @param payloadLen Length in bytes of payload.
+// @param ptr        Start of DNS Answer queries.
+// @param remaining  Bytes remaining after ptr to end of payload.
+// @param numAnswers The number of answer records expected.
+//
+// @returns -1 on error.
+// @returns Length in bytes of response record block.
+//-------------------------------------------------------------------------
 int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int remaining, int numAnswers)
 {
   int len = 0;
@@ -183,7 +222,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
         string cname;
         dnsReadName(cname, ptrOffset + sizeof(ans), payload, payloadLen);
         if (cname.length() > 0)
-          _addCname(cname, name);
+        _addCname(cname, name);
         break;
       }
       case DNS_ANS_TYPE_A:
@@ -193,7 +232,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
         string path;
         string topName = _getTopName(name, path);
         if (0L != _listener)
-          _listener->onDnsRec(addr, topName, path);
+        _listener->onDnsRec(addr, topName, path);
 
         break;
       }
@@ -204,11 +243,11 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
         string path;
         string topName = _getTopName(name, path);
         if (0L != _listener)
-          _listener->onDnsRec(addr, topName, path);
+        _listener->onDnsRec(addr, topName, path);
         break;
       }
       default:
-        break;
+      break;
     }
 
     len += sizeof(ans) + ans._datalen;
@@ -220,14 +259,21 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
 
 static const string PATH_SEP = "||";
 
+//-------------------------------------------------------------------------
+// Prepends name to path.
+//-------------------------------------------------------------------------
 void pathPush(std::string &path, std::string name) {
   if (path.length() > 0)
-    path = name + PATH_SEP + path;
+  path = name + PATH_SEP + path;
   else
-    path = name;
+  path = name;
 }
 
-string DnsParserImpl::_getTopName(string name, string &path)
+//-------------------------------------------------------------------------
+// Recursively looks for top name in cache and builds path.
+// TODO: can't we just use order of CNAME answers?
+//-------------------------------------------------------------------------
+string DnsParserImpl::_getTopName(string name, string &path /* inout */)
 {
   auto it = _mapCnameToName.find(name);
 
@@ -242,16 +288,27 @@ string DnsParserImpl::_getTopName(string name, string &path)
   return _getTopName(it->second, path);
 }
 
+//-------------------------------------------------------------------------
+// Add CNAME to cache for this current packet
+//-------------------------------------------------------------------------
 void DnsParserImpl::_addCname(string cname, string name)
 {
   if (cname == name) return; // avoid infinite recursion
   _mapCnameToName[cname] = name;
 }
 
-
+//-------------------------------------------------------------------------
+// parse()
+// NOTE: Don't assume payload is DNS. Could be any protocol or garbage.
+// NOTE: Don't assume entire payload is present - packet capture may
+//       be truncated.
+// @param payload    Pointer to first byte in payload.
+// @param payloadLen Length in bytes of payload.
+//-------------------------------------------------------------------------
 int DnsParserImpl::parse(char *payload, int payloadLen)
 {
-  _clear();
+  _clear();  // _mapCnameToName cache is only for single datagram - always clear
+
   dns_hdr_t hdr;
   if (payloadLen < sizeof(hdr)) return -1;
 
@@ -273,13 +330,13 @@ int DnsParserImpl::parse(char *payload, int payloadLen)
 
     int recordOffset = sizeof(hdr);
     if (hdr._numQueries > 0) {
-        int size = dnsReadQueries(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numQueries);
-        if (size < 0) return -1; // error
-        recordOffset += size;
-        if ((payloadLen - recordOffset) < 0) return -1;
+      int size = dnsReadQueries(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numQueries);
+      if (size < 0) return -1; // error
+      recordOffset += size;
+      if ((payloadLen - recordOffset) < 0) return -1;
     }
     if (hdr._numAnswers > 0) {
-        int size = dnsReadAnswers(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numAnswers);
+      int size = dnsReadAnswers(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numAnswers);
     }
   }
 }
