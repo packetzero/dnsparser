@@ -5,6 +5,14 @@ Intended for parsing DNS packet payload.  Builds as a static library. See [dnssn
 - Does not assume payload is DNS
 - Supports IPV4 / IPV6 Answer records.
 - Not thread-safe... restrict DnsParser.parse to single thread.
+- Speedup upto 30% by not tracking paths.
+- Speedup upto 400% by ignoring CNAMEs all together.
+
+Example Usage:
+```
+DnsParser *parser = DnsParserNew(myListener, isPathEnabled, ignoreCnames);
+parser->parse((char *)data.data(), data.size());
+```
 
 # Build
 osx/linux:
