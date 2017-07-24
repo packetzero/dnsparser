@@ -41,9 +41,16 @@ public:
 };
 
 /**
- * Create a return a new instance of DnsParser
- * a register listener.
+ * Create a return a new instance of DnsParser and register listener.
+ *
+ * @param listener       For callbacks
+ * @params isPathEnabled If false, the paths will always be empty in callbacks.
+ *                       About a 30% speedup.
+ * @params ignoreCnames  If true, paths will be empty, and no CNAMES parsed.
+ *                       May lead to error if ANSWER records for different
+ *                       domains are intermingled in same datagram.
+ *                       About a 400% speedup.
  */
-DnsParser* DnsParserNew(DnsParserListener *listener);
+DnsParser* DnsParserNew(DnsParserListener *listener, bool isPathEnabled = true, bool ignoreCnames = false);
 
 #endif // _NM_DNS_H_

@@ -51,6 +51,11 @@ strDnsPayload14answers="8da281800001000e00000000026c620367656f096f66666963653336
 static const string
 strDnsPayloadProb="ABF8818000010004000000000377777709746F6D73697470726F03636F6D0000010001C00C000500010000007A0002C010C010000100010000003C000434214FC0C010000100010000003C000422D10D32C010000100010000003C000423A5F1EF491BDA1E720359CEB10C0062000000620000001200D4AE52A13E839801A7B1";
 
+// A github.com 192.30.253.112
+// A github.com 192.30.253.113
+static const string
+strDnsAnsNoCnames="9663818000010002000000000667697468756203636f6d0000010001c00c00010001000000050004c01efd70c00c00010001000000050004c01efd71";
+
 static void hexstring_to_bin(string s, vector<uint8_t> &dest)
 {
   auto p = s.data();
@@ -62,6 +67,24 @@ static void hexstring_to_bin(string s, vector<uint8_t> &dest)
     dest.push_back(val);
     p += 2;
   }
+}
+
+static std::string addr2text ( const in_addr& Addr )
+{
+  std::string strPropText="errIPv4";
+  char IPv4AddressAsString[INET_ADDRSTRLEN];      //buffer needs 16 characters min
+  if ( NULL != inet_ntop ( AF_INET, &Addr, IPv4AddressAsString, sizeof(IPv4AddressAsString) ) )
+  strPropText = IPv4AddressAsString;
+  return strPropText;
+}
+
+static std::string addr2text ( const in6_addr& Addr )
+{
+ std::string strPropText="errIPV6";
+ char IPv6AddressAsString[INET6_ADDRSTRLEN];    //buffer needs 46 characters min
+ if ( NULL != inet_ntop ( AF_INET6, &Addr, IPv6AddressAsString, sizeof(IPv6AddressAsString) ) )
+   strPropText = IPv6AddressAsString;
+ return strPropText;
 }
 
 // emulate what application would provide, so we can test parser
@@ -112,6 +135,27 @@ public:
   std::map<vector<uint8_t>,MyDnsEntry*> _map6;
 };
 
+class ConcatListener : public DnsParserListener
+{
+public:
+
+  virtual void onDnsRec(in_addr addr, std::string name, std::string path) {
+    str += name;
+    str += "=";
+    str += addr2text(addr);
+    str += ",";
+  }
+  virtual void onDnsRec(in6_addr addr, std::string name, std::string path) {
+    str += name;
+    str += "=";
+    str += addr2text(addr);
+    str += ",";
+  }
+
+  std::string str;
+};
+
+
 // tests start here
 
 TEST_F(ParseDnsTest, single)
@@ -128,6 +172,68 @@ TEST_F(ParseDnsTest, single)
   const MyDnsEntry* entry = rmap->lookup(addr);
   ASSERT_TRUE(entry != 0L);
   ASSERT_EQ("p.typekit.net", entry->_name);
+}
+
+TEST_F(ParseDnsTest, singleIgnoreCnames)
+{
+  vector<uint8_t> data;
+  hexstring_to_bin(strDnsPayload14answers, data);
+  MyDnsParserListener *rmap = new MyDnsParserListener();
+
+  DnsParser *parser = DnsParserNew(rmap, false, true);  // don't track cnames
+
+  parser->parse((char *)data.data(), data.size());
+
+  in_addr addr;
+  addr.s_addr = 0xb2916128;
+
+  const MyDnsEntry* entry = rmap->lookup(addr);
+  ASSERT_TRUE(entry != 0L);
+  ASSERT_EQ("lb.geo.office365.com", entry->_name);
+}
+
+TEST_F(ParseDnsTest, singleIgnoreCnames2)
+{
+  vector<uint8_t> data;
+  hexstring_to_bin(strDnsAnsNoCnames, data);
+  MyDnsParserListener *rmap = new MyDnsParserListener();
+
+  DnsParser *parser = DnsParserNew(rmap, false, true);  // don't track cnames
+
+  parser->parse((char *)data.data(), data.size());
+
+  in_addr addr;
+  parse_addr4("192.30.253.112", addr);
+
+  const MyDnsEntry* entry = rmap->lookup(addr);
+  ASSERT_TRUE(entry != 0L);
+  ASSERT_EQ("github.com", entry->_name);
+  ASSERT_EQ(0,entry->_path.length());
+
+  parse_addr4("192.30.253.113", addr);
+
+  entry = rmap->lookup(addr);
+  ASSERT_TRUE(entry != 0L);
+  ASSERT_EQ("github.com", entry->_name);
+
+}
+
+// Compare results with and without ignoreCnames==true
+TEST_F(ParseDnsTest, ignoreCnamesCompare)
+{
+  vector<uint8_t> data;
+  hexstring_to_bin(strDnsPayload14answers, data);
+
+  ConcatListener *listener = new ConcatListener();
+  DnsParser *parser = DnsParserNew(listener);
+  parser->parse((char *)data.data(), data.size());
+  string expected = listener->str;
+
+  listener->str.clear();
+  parser = DnsParserNew(listener, false, true);  // don't track cnames
+  parser->parse((char *)data.data(), data.size());
+
+  ASSERT_EQ(expected, listener->str);
 }
 
 TEST_F(ParseDnsTest, removeOldEntries)
@@ -203,6 +309,92 @@ TEST_F(ParseDnsTest, singlev6)
 
   ASSERT_TRUE(entry == 0L);
 }
+
+#include "../src/cname_tracker.h"
+
+TEST_F(ParseDnsTest, cnameTracker)
+{
+  CnameTracker* ct = CnameTrackerNew(true);
+  ct->addCname("a", "b");
+  ct->addCname("b", "c");
+
+  name_path_tuple npt = ct->getWithPath("c");
+
+  ASSERT_EQ("a", npt.name);
+  ASSERT_EQ("a||b||c", npt.path);
+
+  npt = ct->getWithPath("b");
+
+  ASSERT_EQ("a", npt.name);
+  ASSERT_EQ("a||b", npt.path);
+
+  npt = ct->getWithPath("blah");
+
+  ASSERT_EQ("blah", npt.name);
+  ASSERT_EQ("blah", npt.path);
+
+  ct->clear();
+
+  npt = ct->getWithPath("c");
+
+  ASSERT_EQ("c", npt.name);
+  ASSERT_EQ("c", npt.path);
+
+  delete ct;
+}
+
+TEST_F(ParseDnsTest, cnameTrackerNoPath)
+{
+  CnameTracker* ct = CnameTrackerNew(false);
+  ct->addCname("a", "b");
+  ct->addCname("b", "c");
+
+  name_path_tuple npt = ct->getWithPath("c");
+
+  ASSERT_EQ("a", npt.name);
+  ASSERT_EQ("", npt.path);
+
+  npt = ct->getWithPath("b");
+
+  ASSERT_EQ("a", npt.name);
+  ASSERT_EQ("", npt.path);
+
+  npt = ct->getWithPath("blah");
+
+  ASSERT_EQ("blah", npt.name);
+  ASSERT_EQ("", npt.path);
+
+  ct->clear();
+
+  npt = ct->getWithPath("c");
+
+  ASSERT_EQ("c", npt.name);
+  ASSERT_EQ("", npt.path);
+
+  delete ct;
+}
+
+static const int loopCount = 1000000;
+
+// Timing tests based on my Macbook pro
+// isPathEnabled TRUE  : 11.5 seconds
+// isPathEnabled FALSE :  8.5 seconds
+// ignoreCnames TRUE:     2.7 seconds
+/*
+TEST_F(ParseDnsTest, bench)
+{
+  vector<uint8_t> data;
+  hexstring_to_bin(strDnsPayload14answers.substr(0,strDnsPayload14answers.length()), data);
+  MyDnsParserListener *rmap = 0L;//new MyDnsParserListener();
+  DnsParser *parser = DnsParserNew(rmap, false, true);
+
+  for (int i=0;i<loopCount;i++) {
+    parser->parse((char *)data.data(), data.size());
+  }
+
+  // rely on google test timing printout
+}
+*/
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);

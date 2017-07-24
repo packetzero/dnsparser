@@ -1,4 +1,5 @@
 #include "../include/dnsparser.h"
+#include "cname_tracker.h"
 #include <stdint.h>
 #include <string.h> // memcpy
 
@@ -15,33 +16,25 @@ public:
   // @implements
   virtual int parse(char *payload, int payloadLen);
 
-  DnsParserImpl(DnsParserListener* listener) : _listener(listener) {  }
+  DnsParserImpl(DnsParserListener* listener, bool isPathEnabled, bool ignoreCnames) : _listener(listener), _ignoreCnames(ignoreCnames) {
+    _cnameTracker = CnameTrackerNew(isPathEnabled);
+  }
 
 private:
 
   int    dnsReadAnswers(char *payload, int payloadLen, char *ptr, int remaining, int numAnswers);
-  string _getTopName(string name, string &path);
-  void   _addCname(string cname, string name);
 
-  //-------------------------------------------------------------------------
-  // Clears _mapCnameToName
-  // TODO: Use map.clear() instead?
-  //-------------------------------------------------------------------------
-  void   _clear() {
-    while (_mapCnameToName.size() > 0) {
-      auto it = _mapCnameToName.begin();
-      _mapCnameToName.erase(it);
-    }
-  }
-
-  map<string, string> _mapCnameToName;
   DnsParserListener* _listener;
+  bool               _ignoreCnames;
+  CnameTracker*      _cnameTracker;
 };
 
 //-------------------------------------------------------------------------
 // DnsParserNew - return new instance of DnsParserImpl
 //-------------------------------------------------------------------------
-DnsParser* DnsParserNew(DnsParserListener* listener) { return new DnsParserImpl(listener); }
+DnsParser* DnsParserNew(DnsParserListener* listener, bool isPathEnabled, bool ignoreCnames) {
+  return new DnsParserImpl(listener, isPathEnabled, ignoreCnames);
+}
 
 // Reads a uint16_t and byte-swaps ntohs()
 #define U16S(_PAYLOAD, _INDEX) \
@@ -188,6 +181,9 @@ struct dns_ans_t
 //-------------------------------------------------------------------------
 int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int remaining, int numAnswers)
 {
+  _cnameTracker->clear();
+  string firstName;
+
   int len = 0;
   while(numAnswers > 0)
   {
@@ -214,25 +210,35 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       return -1;
     }
 
+    if (firstName.length() == 0) firstName = name;
+
     // read data section
 
     switch (ans._type) {
       case DNS_ANS_TYPE_CNAME:
       {
+        if (_ignoreCnames) break;
         string cname;
         dnsReadName(cname, ptrOffset + sizeof(ans), payload, payloadLen);
-        if (cname.length() > 0)
-        _addCname(cname, name);
+        if (cname.length() > 0 && cname != name)  // avoid infinite recursion
+          _cnameTracker->addCname(name, cname);
+
         break;
       }
       case DNS_ANS_TYPE_A:
       {
         in_addr addr;
         addr.s_addr = *((uint32_t *)(p + sizeof(ans)));
-        string path;
-        string topName = _getTopName(name, path);
+
+        if (_ignoreCnames) {
+          if (0L != _listener) _listener->onDnsRec(addr, firstName, "");
+          break;
+        }
+
+        name_path_tuple npt = _cnameTracker->getWithPath(name);
+
         if (0L != _listener)
-        _listener->onDnsRec(addr, topName, path);
+          _listener->onDnsRec(addr, npt.name, npt.path);
 
         break;
       }
@@ -240,10 +246,17 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       {
         in6_addr addr;
         memcpy(&addr, p+sizeof(ans), sizeof(addr));
-        string path;
-        string topName = _getTopName(name, path);
+
+        if (_ignoreCnames) {
+          if (0L != _listener)
+            _listener->onDnsRec(addr, firstName, "");
+          break;
+        }
+
+        name_path_tuple npt = _cnameTracker->getWithPath(name);
+
         if (0L != _listener)
-        _listener->onDnsRec(addr, topName, path);
+          _listener->onDnsRec(addr, npt.name, npt.path);
         break;
       }
       default:
@@ -257,45 +270,6 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
   return len;
 }
 
-static const string PATH_SEP = "||";
-
-//-------------------------------------------------------------------------
-// Prepends name to path.
-//-------------------------------------------------------------------------
-void pathPush(std::string &path, std::string name) {
-  if (path.length() > 0)
-  path = name + PATH_SEP + path;
-  else
-  path = name;
-}
-
-//-------------------------------------------------------------------------
-// Recursively looks for top name in cache and builds path.
-// TODO: can't we just use order of CNAME answers?
-//-------------------------------------------------------------------------
-string DnsParserImpl::_getTopName(string name, string &path /* inout */)
-{
-  auto it = _mapCnameToName.find(name);
-
-  // second==name should never happen.  safeguard against infinite recursion
-
-  if (it == _mapCnameToName.end() || it->second == name) {
-    pathPush(path, name);
-    return name;
-  }
-
-  pathPush(path, name);
-  return _getTopName(it->second, path);
-}
-
-//-------------------------------------------------------------------------
-// Add CNAME to cache for this current packet
-//-------------------------------------------------------------------------
-void DnsParserImpl::_addCname(string cname, string name)
-{
-  if (cname == name) return; // avoid infinite recursion
-  _mapCnameToName[cname] = name;
-}
 
 //-------------------------------------------------------------------------
 // parse()
@@ -307,8 +281,6 @@ void DnsParserImpl::_addCname(string cname, string name)
 //-------------------------------------------------------------------------
 int DnsParserImpl::parse(char *payload, int payloadLen)
 {
-  _clear();  // _mapCnameToName cache is only for single datagram - always clear
-
   dns_hdr_t hdr;
   if (payloadLen < sizeof(hdr)) return -1;
 
@@ -336,7 +308,8 @@ int DnsParserImpl::parse(char *payload, int payloadLen)
       if ((payloadLen - recordOffset) < 0) return -1;
     }
     if (hdr._numAnswers > 0) {
-      int size = dnsReadAnswers(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numAnswers);
+      /* int size = */ dnsReadAnswers(payload, payloadLen, payload + recordOffset, payloadLen - recordOffset, hdr._numAnswers);
     }
+    return 0;
   }
 }
