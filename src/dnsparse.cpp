@@ -137,7 +137,7 @@ static int dnsReadName(string &retstr /* out */, uint16_t nameOffset, char *payl
     // if we get here, dotLen > 0
 
     // sanity check on max length of temporary buffer
-    if (dest >= (tmp + sizeof(tmp)))
+    if (dest + dotLen >= (tmp + sizeof(tmp)))
     return -1;
 
     if (dest != tmp) {*dest++ = '.';}
@@ -189,7 +189,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
   {
     dns_ans_t ans;
 
-    if ((remaining - len) <= sizeof(ans)) return -1;
+    if ((remaining - len) <= (int) sizeof(ans)) return -1;
 
     char *p = ptr + len;
     int ptrOffset = (int)(p - payload);
@@ -282,7 +282,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
 int DnsParserImpl::parse(char *payload, int payloadLen)
 {
   dns_hdr_t hdr;
-  if (payloadLen < sizeof(hdr)) return -1;
+  if (payloadLen < (int)sizeof(hdr)) return -1;
 
   hdr._txid = U16S(payload,0);
   hdr._flags = U16S(payload,2);
