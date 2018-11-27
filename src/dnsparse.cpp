@@ -137,10 +137,11 @@ static int dnsReadName(string &retstr /* out */, uint16_t nameOffset, char *payl
     // if we get here, dotLen > 0
 
     // sanity check on max length of temporary buffer
-    if (dest + dotLen >= (tmp + sizeof(tmp)))
-    return -1;
+    if ((dest + dotLen + 1) >= (tmp + sizeof(tmp))) {
+      return -1;
+    }
 
-    if (dest != tmp) {*dest++ = '.';}
+    if (dest != tmp) { *dest++ = '.'; }
     p++;
     memcpy(dest, p, dotLen);
     p += dotLen;
