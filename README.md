@@ -30,3 +30,6 @@ On MacOS, use XCode to open .xcodeproj file placed in the platform/Darwin-x86_64
 On Windows, use Visual Studio to open the .sln file placed in platform/win32-msvc2012/ dir after running build.sh.
 
 And, hey... there's always command-line lldb or gdb. 👍🏼
+
+# License
+This code is licensed under the terms of the Apache 2 license.
