@@ -17,7 +17,7 @@ public:
 
   virtual void                  clear() = 0;
 
-  virtual ~CnameTracker() {};  // virtual destructor hint needed for most c++ compilers.
+  virtual ~CnameTracker() {}  // virtual destructor hint needed for most c++ compilers.
 };
 
 /**
