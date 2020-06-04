@@ -243,7 +243,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       case DNS_ANS_TYPE_A:
       {
         in_addr addr;
-        addr.s_addr = *((uint32_t *)(p + sizeof(ans)));
+        addr.s_addr = *((uint32_t *)(p + sizeof(ans) + fieldsOffset));
 
         if (_ignoreCnames) {
           if (0L != _listener) _listener->onDnsRec(addr, firstName, "");
@@ -260,7 +260,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       case DNS_ANS_TYPE_AAAA:
       {
         in6_addr addr;
-        memcpy(&addr, p+sizeof(ans), sizeof(addr));
+        memcpy(&addr, p+sizeof(ans)+fieldsOffset, sizeof(addr));
 
         if (_ignoreCnames) {
           if (0L != _listener)
