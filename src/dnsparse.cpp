@@ -196,18 +196,32 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
     int ptrOffset = (int)(p - payload);
 
     ans._nm = U16S(p,0);
-    ans._type = U16S(p,2);
-    ans._cls = U16S(p,4);
-    ans._datalen = U16S(p,10);
-
-    int nameOffset = ans._nm & 0x3fff;
 
     string name;
-    if (dnsReadName(name, nameOffset, payload, payloadLen) <= 0) return -1;
+    int nameLen = 0;
+    int nameOffset = 0;
+    int fieldsOffset = 0;
+
+    if ((ans._nm & 0xc000) == 0xc000) {
+      nameOffset = ans._nm & 0x3fff;
+      nameLen = dnsReadName(name, nameOffset, payload, payloadLen);
+      fieldsOffset=0;
+    } else {
+      nameOffset = ptrOffset;
+      nameLen = dnsReadName(name, nameOffset, payload, payloadLen);
+      fieldsOffset=nameLen;
+    }
+
+    if (nameLen<=0) return -1;
+
+    ans._type = U16S(p,fieldsOffset+2);
+    ans._cls = U16S(p,fieldsOffset+4);
+    ans._datalen = U16S(p,fieldsOffset+10);
+
 
     // check datalen bounds
 
-    if ((remaining - len - sizeof(ans)) < ans._datalen) {
+    if ((remaining - len - sizeof(ans) - fieldsOffset) < ans._datalen) {
       return -1;
     }
 
@@ -229,7 +243,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       case DNS_ANS_TYPE_A:
       {
         in_addr addr;
-        addr.s_addr = *((uint32_t *)(p + sizeof(ans)));
+        addr.s_addr = *((uint32_t *)(p + sizeof(ans) + fieldsOffset));
 
         if (_ignoreCnames) {
           if (0L != _listener) _listener->onDnsRec(addr, firstName, "");
@@ -246,7 +260,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       case DNS_ANS_TYPE_AAAA:
       {
         in6_addr addr;
-        memcpy(&addr, p+sizeof(ans), sizeof(addr));
+        memcpy(&addr, p+sizeof(ans)+fieldsOffset, sizeof(addr));
 
         if (_ignoreCnames) {
           if (0L != _listener)
@@ -264,7 +278,7 @@ int DnsParserImpl::dnsReadAnswers(char *payload, int payloadLen, char *ptr, int 
       break;
     }
 
-    len += sizeof(ans) + ans._datalen;
+    len += sizeof(ans) + fieldsOffset + ans._datalen;
 
     numAnswers--;
   }
