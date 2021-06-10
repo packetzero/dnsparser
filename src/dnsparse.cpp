@@ -23,6 +23,7 @@ public:
 private:
 
   int    dnsReadAnswers(char *payload, int payloadLen, char *ptr, int remaining, int numAnswers);
+  int    dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int numQueries);
 
   DnsParserListener* _listener;
   bool               _ignoreCnames;
@@ -75,12 +76,27 @@ int skip_name(char *ptr, int remaining)
   return -1;
 }
 
+#ifdef REPORT_QUERIES
+void reDotName(char* ptr, int remaining) {
+  char *p = ptr;
+  char *end = p + remaining;
+  while (p < end) {
+    int dotLen = *p;
+    if (dotLen < 0 || dotLen >= remaining) return;
+    if (dotLen == 0) return;
+    *p='.';
+    p += dotLen + 1;
+    remaining -= dotLen + 1;
+  }
+}
+#endif
+
 //-------------------------------------------------------------------------
 // Read query records
 // @returns -1 on error
 // @returns Number of bytes taken up by query records
 //-------------------------------------------------------------------------
-int dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int numQueries)
+int DnsParserImpl::dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int numQueries)
 {
   int rem = remaining;
   char *p = ptr;
@@ -88,6 +104,21 @@ int dnsReadQueries(char *payload, int payloadLen, char *ptr, int remaining, int 
   {
     int nameLen = skip_name(p, remaining);
     if (nameLen <= 0) return -1;
+
+#ifdef REPORT_QUERIES
+    // copy the queried host, change dotlen specifiers to dots, and feed it (minus the leading dot) to our listener
+    char* nameTmp=(char*)malloc(nameLen+1);
+    if (nameTmp) {
+        memcpy(nameTmp,p,nameLen);
+        nameTmp[nameLen]=0;
+        reDotName(nameTmp,nameLen);
+        uint16_t type;
+        memcpy(&type,(p+nameLen),sizeof(uint16_t));
+        if (0L != _listener) _listener->onDnsReq(ntohs(type),nameTmp+1);
+        free(nameTmp);
+    }
+#endif
+
     remaining -= nameLen + 4;
     p += nameLen + 4;
     if (remaining < 0) return -1;
@@ -306,12 +337,16 @@ int DnsParserImpl::parse(char *payload, int payloadLen)
 
   if (DNS_FLAG_OPCODE(hdr._flags) != 0) return -1; // not a standard query.
 
+#ifndef REPORT_QUERIES
   if ((hdr._flags & DNS_FLAG_RESPONSE) == 0) return 0;
+#endif
 
   {
     // response
-
+	
+#ifndef REPORT_QUERIES
     if (hdr._numAnswers <= 0) return 0; // only care about answers
+#endif
 
     if (hdr._numQueries > 4 || hdr._numAnswers > 20) return -1; // unreasonable?
 

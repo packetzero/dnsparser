@@ -25,6 +25,9 @@ public:
    */
   virtual void onDnsRec(in_addr addr, std::string name, std::string path) = 0;
   virtual void onDnsRec(in6_addr addr, std::string name, std::string path) = 0;
+#ifdef REPORT_QUERIES
+  virtual void onDnsReq(uint16_t type, std::string name) = 0;
+#endif
 };
 
 class DnsParser
