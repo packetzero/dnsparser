@@ -76,6 +76,7 @@ int skip_name(char *ptr, int remaining)
   return -1;
 }
 
+#ifdef REPORT_QUERIES
 void reDotName(char* ptr, int remaining) {
   char *p = ptr;
   char *end = p + remaining;
@@ -88,6 +89,7 @@ void reDotName(char* ptr, int remaining) {
     remaining -= dotLen + 1;
   }
 }
+#endif
 
 //-------------------------------------------------------------------------
 // Read query records
